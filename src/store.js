@@ -1,7 +1,10 @@
 /** Local-only persistence with an explicit, idempotent schema migration. */
+import { defaultWeaponProgress, normalizeWeaponProgress } from './weapons.js';
+import { normalizeMetricLog } from './metrics.js';
+
 export const KEY = 'wz-counter-trainer-v1';
 export const LEGACY_KEYS = ['wangzhi-train-v1'];
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export function defaultState() {
   return {
@@ -10,6 +13,9 @@ export function defaultState() {
     games: [],
     problems: [],
     reviews: [],
+    metricLogs: [],
+    weaponProgress: defaultWeaponProgress(),
+    weaponStars: [],
     weekPlan: null,
     todayOverrideDate: null,
     publishedTodayId: null,
@@ -45,9 +51,11 @@ export function migrateState(input) {
   const base = defaultState();
   const source = input && typeof input === 'object' ? input : {};
   const state = { ...base, ...source, schemaVersion: SCHEMA_VERSION };
-  for (const key of ['games', 'problems', 'reviews', 'customLevels', 'imports', 'slowSessions', 'misses', 'speedRuns', 'favorites']) {
+  for (const key of ['games', 'problems', 'reviews', 'metricLogs', 'weaponStars', 'customLevels', 'imports', 'slowSessions', 'misses', 'speedRuns', 'favorites']) {
     if (!Array.isArray(state[key])) state[key] = [];
   }
+  state.metricLogs = state.metricLogs.map(normalizeMetricLog).filter(Boolean);
+  state.weaponProgress = normalizeWeaponProgress(state.weaponProgress);
   state.leadLock = state.leadLock && typeof state.leadLock === 'object' ? { ...base.leadLock, ...state.leadLock } : { ...base.leadLock };
   state.kingQuiz = state.kingQuiz && typeof state.kingQuiz === 'object' ? { ...base.kingQuiz, ...state.kingQuiz } : { ...base.kingQuiz };
   if (!state.openings || typeof state.openings !== 'object' || Array.isArray(state.openings)) state.openings = {};
@@ -84,6 +92,9 @@ export function importState(json, currentState = defaultState(), mode = 'merge')
     games: mergeById(current.games, next.games),
     problems: mergeById(current.problems, next.problems),
     reviews: mergeById(current.reviews, next.reviews),
+    metricLogs: mergeById(current.metricLogs, next.metricLogs),
+    weaponStars: mergeById(current.weaponStars, next.weaponStars),
+    weaponProgress: normalizeWeaponProgress({ ...current.weaponProgress, ...next.weaponProgress }),
     customLevels: mergeById(current.customLevels, next.customLevels),
     imports: mergeById(current.imports, next.imports),
   });

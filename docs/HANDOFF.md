@@ -2,7 +2,9 @@
 
 **项目路径（请在此目录打开）：** `/workspace/wangzhi-train`
 
-先读：`AGENTS.md` → 本文件 → `docs/PRODUCT.md`。参考只读：`docs/reference/`。
+先读：`AGENTS.md` → `docs/SPEC.md` → `docs/TASKS.md` → 本文件 → `docs/PRODUCT.md`。参考只读：`docs/reference/`。
+
+T17 / T18 / T19（全局锁住卡、四指标速记、21 章武器库）见 SPEC 与 TASKS；实现后优先保证反打六局面（R3 锁）不被改盘。
 
 ## 建议首批任务（择一或按序）
 

@@ -60,12 +60,17 @@ export function renderToday(root, ctx) {
               <p>家长：请在「题库」里把一道题设为「已发布」，并指定为今日任务（每天最多 1 道）。</p>
               <button type="button" class="btn" data-go="problems">去题库</button>
             </div>`
-          : ''
+          : `<div class="child-entries">
+              <button type="button" class="btn primary big-entry" data-go="weapons">⚔️ 打击武器库</button>
+              <button type="button" class="btn big-entry" data-go="review">帮爸爸勾一下</button>
+            </div>`
       }
     </section>
   `;
 
-  root.querySelector('[data-go="problems"]')?.addEventListener('click', () => navigate('problems'));
+  root.querySelectorAll('[data-go]').forEach((btn) => {
+    btn.addEventListener('click', () => navigate(btn.dataset.go));
+  });
 
   if (!todayProblem) return;
 

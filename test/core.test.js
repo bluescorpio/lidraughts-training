@@ -4,6 +4,8 @@ import { defaultState, exportState, importState, loadState, migrateState, saveSt
 import { applyMoveChecked, boardToFen, genCaptures, longestCaptures, numOf, parseFen, positionFromFen, positionToBoard, rowCol, START_FEN } from '../src/draughts/board.js';
 import { parsePdnOrMoves, gameFieldsFromPdn, normalizePdnDate } from '../src/draughts/pdn.js';
 import { scanCounterNodes } from '../src/draughts/scan.js';
+import { WEAPON_CHAPTERS, weaponStats } from '../src/weapons.js';
+import { LOCK_FLOAT_LINES } from '../src/lockFloat.js';
 
 function memoryStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -85,10 +87,12 @@ test('旧 storage 键无损迁移到规范结构且幂等', () => {
   const old = { role: 'parent', games: [{ id: 'g1' }], reviews: [{ id: 'r1' }], leadLock: { attempts: 2 } };
   const storage = memoryStorage({ [LEGACY_KEYS[0]]: JSON.stringify(old) });
   const state = loadState(storage);
-  assert.equal(state.schemaVersion, 1);
+  assert.equal(state.schemaVersion, 2);
   assert.equal(state.role, 'parent');
   assert.equal(state.games[0].id, 'g1');
   assert.equal(state.leadLock.attempts, 2);
+  assert.equal(state.metricLogs.length, 0);
+  assert.equal(Object.keys(state.weaponProgress).length, 21);
   assert.ok(storage.dump()[KEY], '读取旧键时应写入规范键');
   assert.deepEqual(migrateState(state), state);
   saveState(state, storage);
@@ -104,7 +108,53 @@ test('JSON 导出与合并/替换导入保留自定义数据', () => {
   assert.deepEqual(merged.customLevels.map((x) => x.id), ['level-1', 'level-2']);
   const replaced = importState(backup, current, 'replace');
   assert.deepEqual(replaced.games.map((x) => x.id), ['new']);
-  assert.equal(replaced.schemaVersion, 1);
+  assert.equal(replaced.schemaVersion, 2);
+});
+
+test('导出包含 metricLogs 与武器库字段且合并导入不丢', () => {
+  const current = { ...defaultState(), metricLogs: [{ id: 'm1', counterAfterCombo: '0', leadHeld: 'na', kingFirstSafe: 'yes', planScore: '2', date: '2026-09-05', source: 'lidraughts' }] };
+  const backup = exportState({
+    ...current,
+    metricLogs: [{ id: 'm2', counterAfterCombo: '2plus', leadHeld: 'held_win', kingFirstSafe: 'no', planScore: '3', date: '2026-09-04', source: 'otb' }],
+    weaponStars: [{ id: 's1', chapterId: 'w01', markedAt: 1, source: 'external', cleared: false }],
+    weaponProgress: { w01: 'done' },
+  });
+  assert.match(backup, /"metricLogs"/);
+  assert.match(backup, /"weaponProgress"/);
+  assert.match(backup, /"weaponStars"/);
+  const merged = importState(backup, current, 'merge');
+  assert.deepEqual(merged.metricLogs.map((x) => x.id).sort(), ['m1', 'm2']);
+  assert.equal(merged.weaponProgress.w01, 'done');
+  assert.equal(merged.weaponStars[0].id, 's1');
+});
+
+test('武器库固定 21 章且红星统计不含已清除项', () => {
+  assert.equal(WEAPON_CHAPTERS.length, 21);
+  assert.equal(WEAPON_CHAPTERS[0].id, 'w01');
+  assert.equal(WEAPON_CHAPTERS[20].id, 'w21');
+  const stats = weaponStats({
+    weaponProgress: { w01: 'done', w02: 'done' },
+    weaponStars: [
+      { id: 'a', cleared: false, markedAt: 1 },
+      { id: 'b', cleared: true, clearedAt: Date.now(), markedAt: 1 },
+    ],
+  });
+  assert.equal(stats.chaptersDone, 2);
+  assert.equal(stats.starsOpen, 1);
+  assert.equal(stats.chapterTotal, 21);
+});
+
+test('锁住浮动卡三行文案与 SPEC 一致且不改 leadLock', () => {
+  assert.deepEqual(
+    LOCK_FLOAT_LINES.map((l) => `${l.title}：${l.body}`),
+    [
+      '查反击：对手现在唯一能反击的线/子在哪里？先把它封死或兑掉！',
+      '做简化：能不能用最安全的 1 换 1 把局面缩小？能就换！',
+      '停设饵：现在优势在手，坚决不送饵、不打风险组合！',
+    ]
+  );
+  const before = defaultState().leadLock;
+  assert.equal(before.attempts, 0);
 });
 
 test('删除棋谱时一并去掉相关草稿题与今日指定', () => {

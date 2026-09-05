@@ -1,11 +1,11 @@
 # AGENTS.md — 王植训练站（coding-agent 契约）
 
-面向 OpenAI Codex / Cursor / 同类 coding agent。改代码前先读本文件与 `docs/HANDOFF.md`、`docs/PRODUCT.md`。
+面向 OpenAI Codex / Cursor / 同类 coding agent。改代码前先读本文件与 `docs/SPEC.md`、`docs/TASKS.md`、`docs/HANDOFF.md`、`docs/PRODUCT.md`。
 
 ## 技术栈与数据
 
 - **Vite 5 + 原生 ESM（vanilla JS）**，无 React/Vue 等重框架。
-- 持久化：浏览器 `localStorage`，键名 **`wangzhi-train-v1`**（见 `src/store.js`）。
+- 持久化：浏览器 `localStorage`，键名 **`wz-counter-trainer-v1`**（见 `src/store.js`）；读取并迁移旧键 `wangzhi-train-v1`。`schemaVersion` 当前为 **2**（含 `metricLogs` / `weaponProgress` / `weaponStars`）。
 - UI 语言：**简体中文**。
 - 角色：页眉切换 **孩子 / 家长**（`role: 'child' | 'parent'`）。
 - **今天**硬限制：每天最多 **1** 道已发布题目（`publishDate` 当日或 `publishedTodayId`）。
@@ -32,12 +32,18 @@ src/pages/
   today.js           # 今天：1 题 / 自检 / 无任务文案
   problems.js        # 题库：草稿/发布/归档、线路标记
   library.js         # 资料库：建局、PDN、五类标记→出题草稿
-  review.js          # 复盘本：四指标
-  locklist.js        # 锁住清单：查反击/做简化/停设饵
+  review.js          # 复盘速记：metricLogs 四指标
+  locklist.js        # 锁住清单正式三步
+  weapons.js         # 21 章打击武器库 + 红星复习
   weekplan.js        # 周计划
+src/lockFloat.js     # 全局浮动锁住卡片（session 勾选，不计入 leadLock）
+src/metrics.js
+src/weapons.js
 docs/
-  PRODUCT.md         # 产品规则摘要
-  HANDOFF.md         # 交接与首批任务
+  SPEC.md            # 权威规格（T17–T19 补丁）
+  TASKS.md
+  PRODUCT.md
+  HANDOFF.md
   reference/         # 训练方案与九轮复盘摘录（只读参考）
 ```
 
@@ -45,17 +51,17 @@ docs/
 
 ### 已完成（MVP）
 
-- 今天 / 题库 / 资料库 / 复盘本 / 锁住清单 / 周计划
+- 今天 / 题库 / 资料库 / 复盘速记 / 锁住清单 / 武器库 / 周计划
+- 全局浮动「🛡️ 锁住清单」；四指标 `metricLogs`；21 章打卡与红星
 - 孩子·家长角色；localStorage；种子反打预警草稿（占位局面）
-- 10×100 格棋盘 + 尽力 PDN / 着法
+- 10×10 格棋盘 + 尽力 PDN / 着法
 
 ### 下一步（按优先级）
 
 | 优先级 | 任务 | 说明 |
 | --- | --- | --- |
-| **P0** | PDF 文本层导入 | 从 PDF text layer 抽着法/备注进资料库；先不做 OCR |
-| **P0** | PDN 补局面 | 种子题 placeholder + START_FEN 换成真实关键节点；空 PDN 壳需可填 |
-| **P1** | 答线与复盘图 | 题库答线标记完善；复盘本四指标简易图表 |
+| **P0** | PDN 补局面 | 种子题 placeholder + START_FEN 换成真实关键节点 |
+| **P1** | 计时题红星提示 | 站内尚无计时题；>10s 自动建议标星暂不做 |
 | **P2** | OCR / Lidraughts / 云 / 全引擎 | 延后；勿擅自引入账号、云同步、完整裁判引擎 |
 
 ## 出题模板（按标记 tag）
@@ -70,7 +76,7 @@ docs/
 
 ## 工程约束
 
-1. 迁移 storage 要小心：改 wangzhi-train-v1 结构时做向后兼容合并，勿静默清空用户数据。
+1. 迁移 storage 要小心：改 `wz-counter-trainer-v1` 结构时做向后兼容合并并升 `schemaVersion`，勿静默清空用户数据。
 2. 改完后必须跑通项目构建（Vite build）。
 3. 不要擅自上重框架（React/Vue/Next 等），除非用户明确要求。
 4. 依赖尽量只加必要的；文本层 PDF 可用轻量库；扫描识别与云端属延后项。

@@ -6,12 +6,15 @@ import { renderProblems } from './pages/problems.js';
 import { renderReview } from './pages/review.js';
 import { renderLocklist } from './pages/locklist.js';
 import { renderWeekplan } from './pages/weekplan.js';
+import { renderWeapons } from './pages/weapons.js';
+import { mountLockFloat } from './lockFloat.js';
 
 const NAV = [
   { id: 'today', label: '今天', roles: ['child', 'parent'] },
   { id: 'problems', label: '题库', roles: ['child', 'parent'] },
   { id: 'locklist', label: '锁住清单', roles: ['child', 'parent'] },
   { id: 'review', label: '复盘本', roles: ['parent', 'child'] },
+  { id: 'weapons', label: '武器库', roles: ['child', 'parent'] },
   { id: 'library', label: '资料库', roles: ['parent'] },
   { id: 'weekplan', label: '周计划', roles: ['parent', 'child'] },
 ];
@@ -89,11 +92,15 @@ function render() {
     review: renderReview,
     locklist: renderLocklist,
     weekplan: renderWeekplan,
+    weapons: renderWeapons,
   };
   const fn = map[appState.page] || renderToday;
   fn(root, ctx);
+  lockFloatApi.setShowMetricEntry(appState.state.role === 'parent');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
+
+const lockFloatApi = mountLockFloat(() => navigate);
 
 document.querySelectorAll('.role-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
