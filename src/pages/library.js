@@ -73,6 +73,7 @@ function renderGameList(root, ctx) {
     box.classList.toggle('hidden');
     if (!box.classList.contains('hidden')) {
       box.innerHTML = gameFormHtml();
+      bindPdnFile(box);
       box.querySelector('#save-game').addEventListener('click', () => {
         const g = readGameForm(box);
         g.id = uid('game');
@@ -235,10 +236,38 @@ function gameFormHtml(g = {}) {
     <label class="full">PDN / 着法（如 32-28 19-23 或 16x27）
       <textarea id="f-pdn" rows="4" placeholder="粘贴 PDN 或逐手着法">${esc(g.pdn || '')}</textarea>
     </label>
+    <label class="full">或选择 PDN 文件
+      <input type="file" id="f-pdn-file" accept=".pdn,.pgn,.txt,text/plain" />
+      <span id="f-pdn-status" class="muted small">选择文件后会载入上面的文本框，保存前可修改。</span>
+    </label>
     <div class="full actions-row">
       <button type="button" class="btn primary" id="save-game">保存</button>
     </div>
   `;
+}
+
+function bindPdnFile(box) {
+  const input = box.querySelector('#f-pdn-file');
+  const textarea = box.querySelector('#f-pdn');
+  const status = box.querySelector('#f-pdn-status');
+  if (!input || !textarea) return;
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      textarea.value = text;
+      if (status) {
+        status.className = 'ok small';
+        status.textContent = `已载入 ${file.name}，共 ${text.length} 个字符；请检查后保存。`;
+      }
+    } catch {
+      if (status) {
+        status.className = 'warn small';
+        status.textContent = '文件读取失败，请改为直接粘贴 PDN/PGN 文本。';
+      }
+    }
+  });
 }
 
 function readGameForm(box) {
@@ -544,6 +573,7 @@ function renderGameDetail(root, ctx, gameId) {
     const box = document.createElement('div');
     box.className = 'card-inset form-grid';
     box.innerHTML = gameFormHtml(game) + `<button type="button" class="btn" id="cancel-edit">取消</button>`;
+    bindPdnFile(box);
     root.querySelector('section.card').appendChild(box);
     box.querySelector('#save-game').onclick = () => {
       const data = readGameForm(box);
