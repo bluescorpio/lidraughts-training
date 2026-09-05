@@ -95,6 +95,18 @@ function mergeById(a, b) {
   return [...map.values()];
 }
 
+/** Remove a library game and the drafts / imports that belong to it. */
+export function removeGameFromState(state, gameId) {
+  const s = migrateState(state);
+  const removedIds = new Set((s.problems || []).filter((p) => p.gameId === gameId).map((p) => p.id));
+  s.games = (s.games || []).filter((g) => g.id !== gameId);
+  s.problems = (s.problems || []).filter((p) => p.gameId !== gameId);
+  s.customLevels = (s.customLevels || []).filter((p) => p.gameId !== gameId && !removedIds.has(p.id));
+  s.imports = (s.imports || []).filter((item) => item.gameId !== gameId);
+  if (removedIds.has(s.publishedTodayId)) s.publishedTodayId = null;
+  return s;
+}
+
 function readRaw(storage, key) {
   try { return storage.getItem(key); } catch { return null; }
 }

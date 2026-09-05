@@ -1,5 +1,5 @@
-import { uid, exportState, importState } from '../store.js';
-import { parsePdnOrMoves, movesToPdnBody } from '../draughts/pdn.js';
+import { uid, exportState, importState, removeGameFromState } from '../store.js';
+import { parsePdnOrMoves, movesToPdnBody, gameFieldsFromPdn, summarizePdnImport } from '../draughts/pdn.js';
 import { START_FEN, TAG_OPTIONS, parseFen, applyMoveList } from '../draughts/board.js';
 import { mountBoard, boardAtMove } from '../draughts/BoardView.js';
 import { problemTemplatesForTag } from '../seed.js';
@@ -23,6 +23,15 @@ function renderGameList(root, ctx) {
         <button type="button" class="btn primary" id="btn-new-game">新建对局</button>
       </div>
       <div id="new-game-form" class="hidden card-inset form-grid"></div>
+      <div class="card-inset" id="pdn-import">
+        <h3>从 PDN / PGN 导入</h3>
+        <p class="muted small">可一次选多个文件。读取 [Event]、[Date]、双方、结果和着法后直接加入资料库；导入错了可以删除。</p>
+        <div class="actions-row">
+          <input type="file" id="pdn-file" accept=".pdn,.pgn,.txt,text/plain" multiple />
+          <button type="button" class="btn primary" id="pdn-read">导入到资料库</button>
+        </div>
+        <p id="pdn-status" class="muted small" aria-live="polite"></p>
+      </div>
       <div class="card-inset" id="backup-tools">
         <h3>本机备份</h3>
         <p class="muted small">数据只保存在本机。建议在换设备或大批量导入前先导出一份 JSON。</p>
@@ -50,11 +59,12 @@ function renderGameList(root, ctx) {
             ? games
                 .map(
                   (g) => `
-            <li class="list-item">
+            <li class="list-item game-row">
               <button type="button" class="list-btn" data-open="${g.id}">
                 <strong>${esc(g.title || '未命名')}</strong>
-                <span class="muted">${esc(g.date)} · ${esc(g.color)} · ${esc(g.result)} · 标记 ${g.tags?.length || 0}</span>
+                <span class="muted">${esc(g.date)} · ${esc(g.opponent || '对手未填')} · 执${esc(g.color)} · ${esc(g.result)}</span>
               </button>
+              <button type="button" class="btn danger" data-del-game="${escAttr(g.id)}">删除</button>
             </li>`
                 )
                 .join('')
@@ -67,30 +77,130 @@ function renderGameList(root, ctx) {
   root.querySelectorAll('[data-open]').forEach((btn) => {
     btn.addEventListener('click', () => navigate('library', { gameId: btn.dataset.open }));
   });
+  bindGameDeletes(root, ctx);
 
   root.querySelector('#btn-new-game').addEventListener('click', () => {
     const box = root.querySelector('#new-game-form');
-    box.classList.toggle('hidden');
-    if (!box.classList.contains('hidden')) {
-      box.innerHTML = gameFormHtml();
-      bindPdnFile(box);
-      box.querySelector('#save-game').addEventListener('click', () => {
-        const g = readGameForm(box);
-        g.id = uid('game');
-        g.tags = [];
-        g.createdAt = Date.now();
-        const parsed = parsePdnOrMoves(g.pdn);
-        g.moves = parsed.moves;
-        if (parsed.warnings?.length) g.parseWarnings = parsed.warnings;
-        state.games.unshift(g);
-        save();
-        navigate('library', { gameId: g.id });
-      });
+    if (!box.classList.contains('hidden') && box.innerHTML) {
+      box.classList.add('hidden');
+      return;
     }
+    openNewGameForm(root, ctx);
   });
 
+  setupPdnImport(root, ctx);
   setupPdfImport(root, ctx);
   setupBackup(root, ctx);
+}
+
+function setupPdnImport(root, ctx) {
+  const fileInput = root.querySelector('#pdn-file');
+  const status = root.querySelector('#pdn-status');
+  const importFiles = async (files) => {
+    const list = [...(files || [])];
+    if (!list.length) {
+      status.className = 'warn small';
+      status.textContent = '请先选择一个或多个 PDN / PGN 文件。';
+      return;
+    }
+    const imported = [];
+    const skipped = [];
+    for (const file of list) {
+      try {
+        const text = await file.text();
+        const fields = gameFieldsFromPdn(text);
+        if (!fields.hasHeaders && !fields.moves.length) {
+          skipped.push(file.name);
+          continue;
+        }
+        const game = gameFromPdnText(text, file.name);
+        ctx.state.games.unshift(game);
+        bumpImportCounter(ctx.state, game);
+        imported.push({ game, fields, fileName: file.name });
+      } catch {
+        skipped.push(file.name);
+      }
+    }
+    if (imported.length) ctx.save();
+    if (!imported.length) {
+      status.className = 'warn small';
+      status.textContent = skipped.length
+        ? `没有导入成功。请确认文件是带标签或着法的 PDN。`
+        : '没有导入成功。';
+      return;
+    }
+    status.className = 'ok small';
+    status.textContent = imported.length === 1
+      ? summarizePdnImport(imported[0].fields)
+      : `已导入 ${imported.length} 局${skipped.length ? `，跳过 ${skipped.length} 个文件` : ''}。`;
+    if (imported.length === 1) ctx.navigate('library', { gameId: imported[0].game.id });
+    else ctx.render();
+  };
+  root.querySelector('#pdn-read').addEventListener('click', () => importFiles(fileInput.files));
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files?.length) importFiles(fileInput.files);
+  });
+}
+
+function gameFromPdnText(text, fileName = '') {
+  const fields = gameFieldsFromPdn(text);
+  const fallbackTitle = String(fileName || '').replace(/\.(pdn|pgn|txt)$/i, '') || '导入棋谱';
+  return {
+    id: uid('game'),
+    title: fields.title || fallbackTitle,
+    date: fields.date || todayInput(),
+    opponent: fields.opponent || '',
+    color: fields.colorDetected ? fields.color : '白',
+    result: fields.hasResult ? fields.result : '和',
+    source: fields.source || fileName,
+    notes: fields.notes || '',
+    pdn: text,
+    startFen: START_FEN,
+    moves: fields.moves,
+    parseWarnings: fields.warnings,
+    white: fields.white || '',
+    black: fields.black || '',
+    tags: [],
+    createdAt: Date.now(),
+  };
+}
+
+function bindGameDeletes(root, ctx) {
+  root.querySelectorAll('[data-del-game]').forEach((btn) => {
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      confirmAndDeleteGame(ctx, btn.dataset.delGame);
+    });
+  });
+}
+
+function confirmAndDeleteGame(ctx, gameId) {
+  const game = (ctx.state.games || []).find((g) => g.id === gameId);
+  if (!game) return;
+  const related = (ctx.state.problems || []).filter((p) => p.gameId === gameId).length;
+  const extra = related ? `从这局生成的 ${related} 道草稿题也会一起去掉。` : '';
+  if (!window.confirm(`确定删除「${game.title || '未命名对局'}」吗？${extra}`)) return;
+  Object.assign(ctx.state, removeGameFromState(ctx.state, gameId));
+  ctx.save();
+  ctx.navigate('library');
+}
+
+function openNewGameForm(root, ctx) {
+  const box = root.querySelector('#new-game-form');
+  box.classList.remove('hidden');
+  box.innerHTML = gameFormHtml();
+  bindPdnSources(box);
+  box.querySelector('#save-game').addEventListener('click', () => {
+    const g = buildGameFromForm(box);
+    g.id = uid('game');
+    g.tags = [];
+    g.createdAt = Date.now();
+    ctx.state.games.unshift(g);
+    bumpImportCounter(ctx.state, g);
+    ctx.save();
+    ctx.navigate('library', { gameId: g.id });
+  });
+  return box;
 }
 
 function setupBackup(root, ctx) {
@@ -233,12 +343,12 @@ function gameFormHtml(g = {}) {
     </label>
     <label>来源<input id="f-source" value="${escAttr(g.source || '')}" /></label>
     <label class="full">备注<textarea id="f-notes" rows="2">${esc(g.notes || '')}</textarea></label>
-    <label class="full">PDN / 着法（如 32-28 19-23 或 16x27）
-      <textarea id="f-pdn" rows="4" placeholder="粘贴 PDN 或逐手着法">${esc(g.pdn || '')}</textarea>
+    <label class="full">PDN / 着法
+      <textarea id="f-pdn" rows="6" placeholder="粘贴完整 PDN（含 [Event] [White] [Black] [Result]）或逐手着法，如 32-28 18-23">${esc(g.pdn || '')}</textarea>
     </label>
     <label class="full">或选择 PDN 文件
       <input type="file" id="f-pdn-file" accept=".pdn,.pgn,.txt,text/plain" />
-      <span id="f-pdn-status" class="muted small">选择文件后会载入上面的文本框，保存前可修改。</span>
+      <span id="f-pdn-status" class="muted small">导入后会自动填入标题、日期、对手、颜色和结果，保存前可修改。</span>
     </label>
     <div class="full actions-row">
       <button type="button" class="btn primary" id="save-game">保存</button>
@@ -246,28 +356,59 @@ function gameFormHtml(g = {}) {
   `;
 }
 
-function bindPdnFile(box) {
+function bindPdnSources(box) {
   const input = box.querySelector('#f-pdn-file');
   const textarea = box.querySelector('#f-pdn');
+  if (input) {
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        applyPdnText(box, await file.text(), file.name);
+      } catch {
+        const status = box.querySelector('#f-pdn-status');
+        if (status) {
+          status.className = 'warn small';
+          status.textContent = '文件读取失败，请改为直接粘贴 PDN/PGN 文本。';
+        }
+      }
+    });
+  }
+  if (textarea) {
+    textarea.addEventListener('paste', () => {
+      setTimeout(() => applyPdnText(box, textarea.value), 0);
+    });
+    textarea.addEventListener('change', () => applyPdnText(box, textarea.value));
+  }
+}
+
+function applyPdnText(box, text, fileName = '') {
+  if (box.dataset.pdnText === text) return;
+  const textarea = box.querySelector('#f-pdn');
+  if (textarea && textarea.value !== text) textarea.value = text;
+  const fields = gameFieldsFromPdn(text);
+  fillGameForm(box, fields, fileName);
+  box.dataset.pdnApplied = fields.hasHeaders || fields.moves.length ? '1' : '';
+  box.dataset.pdnText = text;
   const status = box.querySelector('#f-pdn-status');
-  if (!input || !textarea) return;
-  input.addEventListener('change', async () => {
-    const file = input.files?.[0];
-    if (!file) return;
-    try {
-      const text = await file.text();
-      textarea.value = text;
-      if (status) {
-        status.className = 'ok small';
-        status.textContent = `已载入 ${file.name}，共 ${text.length} 个字符；请检查后保存。`;
-      }
-    } catch {
-      if (status) {
-        status.className = 'warn small';
-        status.textContent = '文件读取失败，请改为直接粘贴 PDN/PGN 文本。';
-      }
-    }
-  });
+  if (!status) return;
+  status.className = fields.moves.length ? 'ok small' : 'warn small';
+  status.textContent = fileName ? `${fileName}：${summarizePdnImport(fields)}` : summarizePdnImport(fields);
+}
+
+function fillGameForm(box, fields, fileName = '') {
+  const setIf = (sel, value) => {
+    if (value == null || value === '') return;
+    const el = box.querySelector(sel);
+    if (el) el.value = value;
+  };
+  setIf('#f-title', fields.title);
+  setIf('#f-date', fields.date);
+  setIf('#f-opp', fields.opponent);
+  if (fields.colorDetected) setIf('#f-color', fields.color);
+  if (fields.hasResult) setIf('#f-result', fields.result);
+  setIf('#f-source', fields.source || fileName);
+  setIf('#f-notes', fields.notes);
 }
 
 function readGameForm(box) {
@@ -283,6 +424,37 @@ function readGameForm(box) {
     startFen: START_FEN,
     moves: [],
   };
+}
+
+function buildGameFromForm(box) {
+  const form = readGameForm(box);
+  const extracted = gameFieldsFromPdn(form.pdn);
+  const applied = box.dataset.pdnApplied === '1';
+  const game = applied ? { ...form } : mergeExtractedFields(form, extracted);
+  game.moves = extracted.moves;
+  game.parseWarnings = extracted.warnings;
+  game.startFen = START_FEN;
+  if (extracted.white) game.white = extracted.white;
+  if (extracted.black) game.black = extracted.black;
+  return game;
+}
+
+function mergeExtractedFields(form, extracted) {
+  const next = { ...form };
+  if ((!next.title || next.title === '未命名对局') && extracted.title) next.title = extracted.title;
+  if (extracted.date && (!next.date || next.date === todayInput())) next.date = extracted.date;
+  if (!next.opponent && extracted.opponent) next.opponent = extracted.opponent;
+  if (!next.source && extracted.source) next.source = extracted.source;
+  if (!next.notes && extracted.notes) next.notes = extracted.notes;
+  if (extracted.colorDetected) next.color = extracted.color;
+  if (extracted.hasResult) next.result = extracted.result;
+  return next;
+}
+
+function bumpImportCounter(state, game) {
+  if (!(game.moves || []).length) return;
+  state.counters = state.counters || { gamesImported: 0, problemsDone: 0 };
+  state.counters.gamesImported = Number(state.counters.gamesImported || 0) + 1;
 }
 
 function renderGameDetail(root, ctx, gameId) {
@@ -301,7 +473,10 @@ function renderGameDetail(root, ctx, gameId) {
     <section class="card">
       <div class="row-between">
         <button type="button" class="btn" data-back>← 资料库</button>
-        <button type="button" class="btn" id="btn-edit">编辑</button>
+        <div class="actions-row">
+          <button type="button" class="btn" id="btn-edit">编辑</button>
+          <button type="button" class="btn danger" id="btn-del-game">删除</button>
+        </div>
       </div>
       <h2>${esc(game.title)}</h2>
       <p class="muted">${esc(game.date)} · ${esc(game.opponent)} · ${esc(game.color)} · ${esc(game.result)}</p>
@@ -347,6 +522,7 @@ function renderGameDetail(root, ctx, gameId) {
   `;
 
   root.querySelector('[data-back]').onclick = () => navigate('library');
+  root.querySelector('#btn-del-game').onclick = () => confirmAndDeleteGame(ctx, game.id);
 
   const boardApi = mountBoard(root.querySelector('#lib-board'), { board });
 
@@ -573,14 +749,10 @@ function renderGameDetail(root, ctx, gameId) {
     const box = document.createElement('div');
     box.className = 'card-inset form-grid';
     box.innerHTML = gameFormHtml(game) + `<button type="button" class="btn" id="cancel-edit">取消</button>`;
-    bindPdnFile(box);
+    bindPdnSources(box);
     root.querySelector('section.card').appendChild(box);
     box.querySelector('#save-game').onclick = () => {
-      const data = readGameForm(box);
-      Object.assign(game, data);
-      const parsed = parsePdnOrMoves(game.pdn);
-      game.moves = parsed.moves;
-      game.parseWarnings = parsed.warnings;
+      Object.assign(game, buildGameFromForm(box));
       save();
       navigate('library', { gameId: game.id });
     };
