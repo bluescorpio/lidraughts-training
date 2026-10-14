@@ -9,17 +9,15 @@ export function renderProblems(root, ctx) {
 
   if (openId) return renderPractice(root, ctx, openId);
 
-  const all = state.problems || [];
-  const list =
-    filter === '全部' ? all : all.filter((p) => p.status === filter);
-
   const isParent = state.role === 'parent';
+  const filters = isParent ? ['全部', '草稿', '杀棋', '已发布', '归档'] : ['全部', '草稿', '已发布', '归档'];
+  const list = visibleProblems(state, filter);
 
   root.innerHTML = `
     <section class="card">
       <h2>题库</h2>
       <div class="filter-row">
-        ${['全部', '草稿', '已发布', '归档']
+        ${filters
           .map(
             (s) =>
               `<button type="button" class="btn ${filter === s ? 'primary' : ''}" data-filter="${s}">${s}</button>`
@@ -28,8 +26,12 @@ export function renderProblems(root, ctx) {
       </div>
       ${
         isParent
-          ? `<p class="muted">每天最多发布 1 道到「今天」。发布会自动设为今日任务。</p>`
-          : `<p class="muted">练习已发布的题目；今天页只会安排其中一道。</p>`
+          ? `<p class="muted">${
+              filter === '杀棋'
+                ? '杀棋草稿单独放在这里，看过再发布。发布到「今天」仍然每天最多 1 道。'
+                : '每天最多发布 1 道到「今天」。发布会自动设为今日任务。'
+            }</p>`
+          : `<p class="muted">练习已发布的题目；今天页只会安排其中一道。杀棋可以去「杀棋专练」。</p>`
       }
       <ul class="list">
         ${
@@ -163,6 +165,11 @@ function renderPractice(root, ctx, problemId) {
       <p class="muted">${esc(pr.gameTitle || '')} ${esc(pr.moveLabel || '')}</p>
       <p class="prompt">${esc(pr.prompt)}</p>
       ${pr.placeholder ? `<p class="warn">待补棋谱：当前为起始局面占位。</p>` : ''}
+      ${
+        pr.bank === 'kill'
+          ? `<div class="actions-row"><button type="button" class="btn" id="open-kill">在杀棋专练里走这题</button></div>`
+          : ''
+      }
       <div id="prob-board"></div>
       ${
         canPractice
@@ -193,6 +200,9 @@ function renderPractice(root, ctx, problemId) {
   `;
 
   root.querySelector('[data-back]').onclick = () => navigate('problems', { status: ctx.params?.status || '全部' });
+  root.querySelector('#open-kill')?.addEventListener('click', () => {
+    navigate('kill', { killId: pr.killId || pr.id, filter: pr.prefix || 'all' });
+  });
 
   const { board } = parseFen(pr.fen || undefined);
   const boardApi = mountBoard(root.querySelector('#prob-board'), {
@@ -247,6 +257,14 @@ function renderPractice(root, ctx, problemId) {
     save();
     navigate('problems', { problemId: pr.id });
   });
+}
+
+export function visibleProblems(state, filter) {
+  let list = state.problems || [];
+  if (state.role !== 'parent') list = list.filter((problem) => !(problem.bank === 'kill' && problem.status === '草稿'));
+  if (filter === '杀棋') return list.filter((problem) => problem.bank === 'kill');
+  if (filter === '全部') return list;
+  return list.filter((problem) => problem.status === filter);
 }
 
 function esc(s) {

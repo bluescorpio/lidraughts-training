@@ -1,10 +1,11 @@
 /** Local-only persistence with an explicit, idempotent schema migration. */
 import { defaultWeaponProgress, normalizeWeaponProgress } from './weapons.js';
 import { normalizeMetricLog } from './metrics.js';
+import { CONTENT_PACK_ID, KILL_DRAFTS, OTB_GAMES } from './content/pack.js';
 
 export const KEY = 'wz-counter-trainer-v1';
 export const LEGACY_KEYS = ['wangzhi-train-v1'];
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export function defaultState() {
   return {
@@ -29,6 +30,8 @@ export function defaultState() {
     favorites: [],
     openings: {},
     counters: { gamesImported: 0, problemsDone: 0 },
+    seededPacks: [],
+    killSolved: [],
   };
 }
 
@@ -51,8 +54,16 @@ export function migrateState(input) {
   const base = defaultState();
   const source = input && typeof input === 'object' ? input : {};
   const state = { ...base, ...source, schemaVersion: SCHEMA_VERSION };
-  for (const key of ['games', 'problems', 'reviews', 'metricLogs', 'weaponStars', 'customLevels', 'imports', 'slowSessions', 'misses', 'speedRuns', 'favorites']) {
+  for (const key of ['games', 'problems', 'reviews', 'metricLogs', 'weaponStars', 'customLevels', 'imports', 'slowSessions', 'misses', 'speedRuns', 'favorites', 'seededPacks', 'killSolved']) {
     if (!Array.isArray(state[key])) state[key] = [];
+  }
+  state.killSolved = state.killSolved.filter((id) => typeof id === 'string');
+  if (!state.seededPacks.includes(CONTENT_PACK_ID)) {
+    const seenGames = new Set(state.games.map((game) => game?.id).filter(Boolean));
+    const seenProblems = new Set(state.problems.map((problem) => problem?.id).filter(Boolean));
+    state.games = [...state.games, ...OTB_GAMES.filter((game) => !seenGames.has(game.id))];
+    state.problems = [...state.problems, ...KILL_DRAFTS.filter((problem) => !seenProblems.has(problem.id))];
+    state.seededPacks = [...state.seededPacks, CONTENT_PACK_ID];
   }
   state.metricLogs = state.metricLogs.map(normalizeMetricLog).filter(Boolean);
   state.weaponProgress = normalizeWeaponProgress(state.weaponProgress);

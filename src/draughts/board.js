@@ -379,8 +379,10 @@ export function applyMoveChecked(pos, move, color = pos?.sideToMove || 'W') {
     return { ok: false, error: `不合法着法：${move}`, position: clonePosition(pos) };
   }
   let next = clonePosition(pos);
-  if (separator === '-') next = movePiece(next, from, path[1], color, piece.king);
-  else {
+  if (separator === '-') {
+    next = movePiece(next, from, path[1], color, piece.king);
+    if (next && !piece.king) promotePosition(next, color, path[1]);
+  } else {
     removePiece(next, from, color);
     let current = from;
     for (let i = 1; i < path.length; i += 1) {

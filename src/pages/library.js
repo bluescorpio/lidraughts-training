@@ -5,6 +5,7 @@ import { mountBoard, boardAtMove } from '../draughts/BoardView.js';
 import { problemTemplatesForTag } from '../seed.js';
 import { extractPdfText } from '../pdf/text.js';
 import { scanPdn } from '../draughts/scan.js';
+import { REVIEW_ROWS } from '../content/pack.js';
 
 export function renderLibrary(root, ctx) {
   const { state, save, navigate } = ctx;
@@ -15,7 +16,10 @@ export function renderLibrary(root, ctx) {
 
 function renderGameList(root, ctx) {
   const { state, save, navigate } = ctx;
-  const games = state.games || [];
+  const games = [...(state.games || [])].sort((a, b) => {
+    const rank = (game) => (game.origin === 'otb-review' ? 0 : 1);
+    return rank(a) - rank(b);
+  });
   root.innerHTML = `
     <section class="card">
       <div class="row-between">
@@ -53,6 +57,7 @@ function renderGameList(root, ctx) {
         <p id="pdf-status" class="muted small" aria-live="polite"></p>
         <div id="pdf-preview" class="hidden form-grid"></div>
       </div>
+      ${renderReviewOverview(games)}
       <ul class="list">
         ${
           games.length
@@ -62,7 +67,7 @@ function renderGameList(root, ctx) {
             <li class="list-item game-row">
               <button type="button" class="list-btn" data-open="${g.id}">
                 <strong>${esc(g.title || '未命名')}</strong>
-                <span class="muted">${esc(g.date)} · ${esc(g.opponent || '对手未填')} · 执${esc(g.color)} · ${esc(g.result)}</span>
+                <span class="muted">${esc(g.date)} · ${esc(g.opponent || '对手未填')} · 执${esc(g.color)} · ${esc(g.result)}${g.origin === 'otb-review' ? ' · 复盘' : ''}</span>
               </button>
               <button type="button" class="btn danger" data-del-game="${escAttr(g.id)}">删除</button>
             </li>`
@@ -91,6 +96,29 @@ function renderGameList(root, ctx) {
   setupPdnImport(root, ctx);
   setupPdfImport(root, ctx);
   setupBackup(root, ctx);
+}
+
+function renderReviewOverview(games) {
+  const byId = new Map((games || []).map((game) => [game.id, game]));
+  const ready = REVIEW_ROWS.filter((row) => row.gameId && byId.has(row.gameId)).length;
+  return `
+    <details class="card-inset" id="otb-overview">
+      <summary>复盘总览（${REVIEW_ROWS.length} 局，${ready} 局可看棋谱）</summary>
+      <p class="muted small">2026-08-28 的席颂哲和 Zack 是两盘不同的棋。</p>
+      <ul class="list tight">
+        ${REVIEW_ROWS.map((row) => {
+          const game = row.gameId ? byId.get(row.gameId) : null;
+          const title = game
+            ? `${esc(game.date)} · ${esc(game.opponent || row.opponent)}`
+            : `${esc(row.date)} · ${esc(row.opponent)}`;
+          const result = game ? `${esc(game.result)}` : esc(row.result);
+          const body = `<span class="muted small">${result}${game ? '' : ' · 棋谱待补'}</span><p class="small">${esc(row.summary)}</p>`;
+          if (!game) return `<li class="list-item"><strong>${title}</strong>${body}</li>`;
+          return `<li class="list-item"><button type="button" class="list-btn" data-open="${escAttr(game.id)}"><strong>${title}</strong></button>${body}</li>`;
+        }).join('')}
+      </ul>
+    </details>
+  `;
 }
 
 function setupPdnImport(root, ctx) {

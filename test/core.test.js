@@ -6,6 +6,9 @@ import { parsePdnOrMoves, gameFieldsFromPdn, normalizePdnDate } from '../src/dra
 import { scanCounterNodes } from '../src/draughts/scan.js';
 import { WEAPON_CHAPTERS, weaponStats } from '../src/weapons.js';
 import { LOCK_FLOAT_LINES } from '../src/lockFloat.js';
+import { KILL_DRAFTS, OTB_GAMES, REVIEW_ROWS } from '../src/content/pack.js';
+import { gradeAttempt, parseAnswerLine, playableSolverMoves, repliesAfter } from '../src/kill/line.js';
+import { visibleProblems } from '../src/pages/problems.js';
 
 function memoryStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -87,9 +90,11 @@ test('旧 storage 键无损迁移到规范结构且幂等', () => {
   const old = { role: 'parent', games: [{ id: 'g1' }], reviews: [{ id: 'r1' }], leadLock: { attempts: 2 } };
   const storage = memoryStorage({ [LEGACY_KEYS[0]]: JSON.stringify(old) });
   const state = loadState(storage);
-  assert.equal(state.schemaVersion, 2);
+  assert.equal(state.schemaVersion, 3);
   assert.equal(state.role, 'parent');
   assert.equal(state.games[0].id, 'g1');
+  assert.equal(state.games.filter((game) => game.origin === 'otb-review').length, 15);
+  assert.ok(state.problems.some((problem) => problem.id === 'K1' && problem.bank === 'kill' && problem.status === '草稿'));
   assert.equal(state.leadLock.attempts, 2);
   assert.equal(state.metricLogs.length, 0);
   assert.equal(Object.keys(state.weaponProgress).length, 21);
@@ -104,11 +109,14 @@ test('JSON 导出与合并/替换导入保留自定义数据', () => {
   const current = { ...defaultState(), games: [{ id: 'old' }], customLevels: [{ id: 'level-1', title: '旧题' }] };
   const backup = exportState({ ...current, games: [{ id: 'new' }], customLevels: [{ id: 'level-2' }] });
   const merged = importState(backup, current, 'merge');
-  assert.deepEqual(merged.games.map((x) => x.id), ['old', 'new']);
+  assert.ok(merged.games.some((game) => game.id === 'old'));
+  assert.ok(merged.games.some((game) => game.id === 'new'));
+  assert.equal(merged.games.filter((game) => game.origin === 'otb-review').length, 15);
   assert.deepEqual(merged.customLevels.map((x) => x.id), ['level-1', 'level-2']);
   const replaced = importState(backup, current, 'replace');
-  assert.deepEqual(replaced.games.map((x) => x.id), ['new']);
-  assert.equal(replaced.schemaVersion, 2);
+  assert.equal(replaced.games.some((game) => game.id === 'new'), true);
+  assert.equal(replaced.games.some((game) => game.id === 'old'), false);
+  assert.equal(replaced.schemaVersion, 3);
 });
 
 test('导出包含 metricLogs 与武器库字段且合并导入不丢', () => {
@@ -167,8 +175,10 @@ test('删除棋谱时一并去掉相关草稿题与今日指定', () => {
     publishedTodayId: 'p1',
   };
   const next = removeGameFromState(state, 'g1');
-  assert.deepEqual(next.games.map((g) => g.id), ['g2']);
-  assert.deepEqual(next.problems.map((p) => p.id), ['p2']);
+  assert.equal(next.games.some((game) => game.id === 'g1'), false);
+  assert.equal(next.games.some((game) => game.id === 'g2'), true);
+  assert.equal(next.problems.some((problem) => problem.id === 'p1'), false);
+  assert.equal(next.problems.some((problem) => problem.id === 'p2'), true);
   assert.equal(next.customLevels.length, 0);
   assert.equal(next.imports.length, 0);
   assert.equal(next.publishedTodayId, null);
@@ -207,6 +217,11 @@ test('严格局面演算覆盖实战向量与升王', () => {
   const promotedOne = applyMoveChecked(promotion, '14x5', 'W');
   assert.equal(promotedOne.ok, true);
   assert.deepEqual(promotedOne.position.WK, [5]);
+
+  const quietPromotion = applyMoveChecked({ W: [9], B: [], WK: [], BK: [], sideToMove: 'W' }, '9-4', 'W');
+  assert.equal(quietPromotion.ok, true);
+  assert.deepEqual(quietPromotion.position.WK, [4]);
+  assert.equal(applyMoveChecked(quietPromotion.position, '4-10', 'W').ok, true);
 });
 
 test('反打扫描识别 A/B 节点并给出最长答案线', () => {
@@ -219,4 +234,68 @@ test('反打扫描识别 A/B 节点并给出最长答案线', () => {
   const a = scanCounterNodes({ moves: ['24x33', '32x23'], firstColor: 'B' }, boardToFen(positionToBoard(aNodePos), 'B'));
   assert.ok(a.nodes.some((node) => node.type === 'A'));
   assert.equal(a.warnings.length, 0);
+});
+
+test('OTB 复盘棋谱进入同一资料库且跳过没有 PDN 的对局', () => {
+  assert.equal(OTB_GAMES.length, 15);
+  assert.equal(REVIEW_ROWS.length, 21);
+  assert.equal(REVIEW_ROWS.filter((row) => row.gameId).length, 15);
+  assert.equal(OTB_GAMES.some((game) => game.folder === '2026-08-25-丁牧一'), false);
+  assert.ok(OTB_GAMES.every((game) => game.origin === 'otb-review' && game.moves.length > 0 && game.pdn.includes('[White')));
+  const zhang = OTB_GAMES.find((game) => game.id === 'otb_2026-07-09-张立');
+  assert.equal(zhang.opponent, '张立');
+  assert.equal(zhang.color, '黑');
+  assert.equal(zhang.moves[0], '32-28');
+  const state = migrateState({ games: [{ id: 'keep' }], problems: [{ id: 'local-draft', status: '草稿' }] });
+  assert.equal(state.schemaVersion, 3);
+  assert.equal(state.games[0].id, 'keep');
+  assert.equal(state.games.filter((game) => game.origin === 'otb-review').length, 15);
+  assert.equal(state.problems.filter((problem) => problem.bank === 'kill').length, 102);
+  assert.equal(state.problems[0].id, 'local-draft');
+  const again = migrateState(state);
+  assert.equal(again.games.length, state.games.length);
+  assert.equal(again.problems.length, state.problems.length);
+  const removed = migrateState({
+    ...again,
+    games: again.games.filter((game) => game.id !== 'otb_2026-07-09-张立'),
+  });
+  assert.equal(removed.games.some((game) => game.id === 'otb_2026-07-09-张立'), false);
+});
+
+test('102 道杀棋以草稿进入题库并可在专练里核对', () => {
+  assert.equal(KILL_DRAFTS.length, 102);
+  assert.deepEqual(
+    [...new Set(KILL_DRAFTS.map((puzzle) => puzzle.level))].sort(),
+    ['一步杀', '三步杀', '二步杀']
+  );
+  assert.ok(KILL_DRAFTS.every((puzzle) => puzzle.status === '草稿' && puzzle.bank === 'kill' && !puzzle.publishDate));
+  const counts = { K: 0, E: 0, S: 0 };
+  for (const puzzle of KILL_DRAFTS) counts[puzzle.prefix] += 1;
+  assert.deepEqual(counts, { K: 51, E: 33, S: 18 });
+  for (const puzzle of KILL_DRAFTS) {
+    const moves = playableSolverMoves(puzzle);
+    assert.equal(moves[0], puzzle.answer, puzzle.id);
+    assert.ok(puzzle.fen.startsWith(puzzle.side === 'w' ? 'W:' : 'B:'), puzzle.id);
+  }
+  const line = parseAnswerLine('18-22; (白强制 27x18x9x20); 15x24x35x44', '18-22');
+  assert.deepEqual(line.map((step) => step.by), ['solver', 'reply', 'solver']);
+  const e1 = KILL_DRAFTS.find((puzzle) => puzzle.id === 'E1');
+  assert.deepEqual(repliesAfter(e1, ['18-22']), ['27x18x9x20']);
+  assert.equal(gradeAttempt(e1, []).status, 'empty');
+  assert.equal(gradeAttempt(e1, ['18-22']).status, 'partial');
+  assert.equal(gradeAttempt(e1, ['18-22', '15x24x35x44']).status, 'full');
+  assert.equal(gradeAttempt(e1, ['18-23']).status, 'miss');
+  const guard = parseAnswerLine('33-28（防 13-19）', '33-28');
+  assert.deepEqual(guard, [{ by: 'solver', move: '33-28' }]);
+
+  const state = {
+    role: 'child',
+    problems: [
+      { id: 'published', status: '已发布', bank: 'kill' },
+      { id: 'K1', status: '草稿', bank: 'kill' },
+      { id: 'counter', status: '草稿' },
+    ],
+  };
+  assert.deepEqual(visibleProblems(state, '全部').map((problem) => problem.id), ['published', 'counter']);
+  assert.deepEqual(visibleProblems({ ...state, role: 'parent' }, '杀棋').map((problem) => problem.id), ['published', 'K1']);
 });

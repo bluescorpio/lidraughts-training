@@ -5,7 +5,7 @@
 ## 技术栈与数据
 
 - **Vite 5 + 原生 ESM（vanilla JS）**，无 React/Vue 等重框架。
-- 持久化：浏览器 `localStorage`，键名 **`wz-counter-trainer-v1`**（见 `src/store.js`）；读取并迁移旧键 `wangzhi-train-v1`。`schemaVersion` 当前为 **2**（含 `metricLogs` / `weaponProgress` / `weaponStars`）。
+- 持久化：浏览器 `localStorage`，键名 **`wz-counter-trainer-v1`**（见 `src/store.js`）；读取并迁移旧键 `wangzhi-train-v1`。`schemaVersion` 当前为 **3**（在 v2 的 `metricLogs` / `weaponProgress` / `weaponStars` 上增加一次性内容包 `seededPacks` 与 `killSolved`）。
 - UI 语言：**简体中文**。
 - 角色：页眉切换 **孩子 / 家长**（`role: 'child' | 'parent'`）。
 - **今天**硬限制：每天最多 **1** 道已发布题目（`publishDate` 当日或 `publishedTodayId`）。

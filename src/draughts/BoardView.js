@@ -85,6 +85,10 @@ export function mountBoard(el, opts = {}) {
       state.highlights = new Set(sqs || []);
       render();
     },
+    setSelected(sq) {
+      state.selected = sq || null;
+      render();
+    },
     toggleHighlight(sq) {
       if (state.highlights.has(sq)) state.highlights.delete(sq);
       else state.highlights.add(sq);

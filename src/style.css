@@ -322,6 +322,37 @@ textarea { min-height: 80px; resize: vertical; }
 .child-entries { display: grid; gap: 10px; margin-top: 16px; }
 .big-entry { min-height: 56px; font-size: 1.05rem; }
 
+.kill-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 0;
+  overflow: hidden;
+}
+.kill-nav.open {
+  max-height: 240px;
+  overflow: auto;
+  margin: 8px 0 4px;
+  padding: 2px;
+}
+.kill-id {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 8px;
+  min-width: 52px;
+  min-height: 36px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.kill-id.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+.kill-id.done { box-shadow: inset 0 0 0 2px var(--ok); }
+.kill-page .hint { line-height: 1.5; }
+#otb-overview summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+
 @media (max-width: 560px) {
   .form-grid { grid-template-columns: 1fr; }
   .brand h1 { font-size: 1.1rem; }

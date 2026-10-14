@@ -58,10 +58,14 @@ export function renderToday(root, ctx) {
         state.role === 'parent'
           ? `<div class="parent-hint card-inset">
               <p>家长：请在「题库」里把一道题设为「已发布」，并指定为今日任务（每天最多 1 道）。</p>
-              <button type="button" class="btn" data-go="problems">去题库</button>
+              <div class="actions-row">
+                <button type="button" class="btn" data-go="problems">去题库</button>
+                <button type="button" class="btn" data-go="kill">杀棋专练</button>
+              </div>
             </div>`
           : `<div class="child-entries">
-              <button type="button" class="btn primary big-entry" data-go="weapons">⚔️ 打击武器库</button>
+              <button type="button" class="btn primary big-entry" data-go="kill">杀棋专练</button>
+              <button type="button" class="btn big-entry" data-go="weapons">⚔️ 打击武器库</button>
               <button type="button" class="btn big-entry" data-go="review">帮爸爸勾一下</button>
             </div>`
       }

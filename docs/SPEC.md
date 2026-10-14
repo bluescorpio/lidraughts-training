@@ -7,7 +7,7 @@
 ## 关键数据不动清单
 
 - 不改内置反打 LEVELS 盘面；R3 仍锁定。
-- localStorage 主 key 仍为 `wz-counter-trainer-v1`；新增字段必须带 `schemaVersion` 迁移。
+- localStorage 主 key 仍为 `wz-counter-trainer-v1`；新增字段必须带 `schemaVersion` 迁移。当前为 **3**：一次性并入 OTB 复盘棋谱与杀棋草稿（`seededPacks`），并记录 `killSolved`。已有对局和题目按 id 保留，不覆盖、不清空。
 - 四指标枚举值与红星 / `weaponProgress` 字段名以本文件为准，避免与旧草稿 `wangzhi-train-v1` 混用。
 - 不题海、不比较、不焦虑文案。
 
