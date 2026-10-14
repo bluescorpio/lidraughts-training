@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultState, exportState, importState, loadState, migrateState, saveState, removeGameFromState, KEY, LEGACY_KEYS } from '../src/store.js';
-import { applyMoveChecked, boardToFen, genCaptures, longestCaptures, numOf, parseFen, positionFromFen, positionToBoard, rowCol, START_FEN } from '../src/draughts/board.js';
+import { applyMoveChecked, boardToFen, genCaptures, longestCaptures, numOf, parseFen, playInteractiveStep, positionFromFen, positionToBoard, rowCol, START_FEN } from '../src/draughts/board.js';
 import { parsePdnOrMoves, gameFieldsFromPdn, normalizePdnDate } from '../src/draughts/pdn.js';
 import { scanCounterNodes } from '../src/draughts/scan.js';
 import { WEAPON_CHAPTERS, weaponStats } from '../src/weapons.js';
 import { LOCK_FLOAT_LINES } from '../src/lockFloat.js';
 import { KILL_DRAFTS, OTB_GAMES, REVIEW_ROWS } from '../src/content/pack.js';
+import { targetSquares } from '../src/kill/line.js';
 import { gradeAttempt, parseAnswerLine, playableSolverMoves, repliesAfter } from '../src/kill/line.js';
 import { visibleProblems } from '../src/pages/problems.js';
 
@@ -298,4 +299,71 @@ test('102 道杀棋以草稿进入题库并可在专练里核对', () => {
   };
   assert.deepEqual(visibleProblems(state, '全部').map((problem) => problem.id), ['published', 'counter']);
   assert.deepEqual(visibleProblems({ ...state, role: 'parent' }, '杀棋').map((problem) => problem.id), ['published', 'K1']);
+});
+
+test('K1 走子拒绝非吃、反向和走错棋子，并接受合法答案', () => {
+  const puzzle = KILL_DRAFTS.find((item) => item.id === 'K1');
+  const start = positionFromFen(puzzle.fen);
+  assert.equal(start.sideToMove, 'B');
+  assert.deepEqual(targetSquares(start, 35), [44]);
+
+  const quiet = playInteractiveStep(start, 18, 23);
+  assert.equal(quiet.ok, false);
+  assert.equal(quiet.position, start);
+  assert.match(quiet.error, /必须先吃/);
+
+  const backward = playInteractiveStep(start, 35, 30);
+  assert.equal(backward.ok, false);
+  assert.equal(backward.position, start);
+
+  const wrongPiece = playInteractiveStep(start, 40, 34);
+  assert.equal(wrongPiece.ok, false);
+  assert.equal(wrongPiece.position, start);
+  assert.match(wrongPiece.error, /该走的一方/);
+
+  const sameSquare = playInteractiveStep(start, 35, 35);
+  assert.equal(sameSquare.ok, false);
+  assert.equal(sameSquare.position, start);
+
+  const legal = playInteractiveStep(start, 35, 44);
+  assert.equal(legal.ok, true);
+  assert.equal(legal.finished, true);
+  assert.equal(legal.move, '35x44');
+  assert.equal(legal.chain, null);
+  assert.ok(legal.position.B.includes(44));
+  assert.equal(legal.position.B.includes(35), false);
+  assert.equal(legal.position.WK.includes(40), false);
+  assert.equal(legal.position.sideToMove, 'W');
+  const checked = applyMoveChecked(start, puzzle.answer, 'B');
+  assert.equal(checked.ok, true);
+  assert.deepEqual(legal.position, checked.position);
+
+  const chainPuzzle = KILL_DRAFTS.find((item) => item.id === 'K6');
+  let pos = positionFromFen(chainPuzzle.fen);
+  const skip = playInteractiveStep(pos, 11, 24);
+  assert.equal(skip.ok, false);
+  assert.equal(skip.position, pos);
+  assert.match(skip.error, /不能一次跳到终点/);
+  assert.deepEqual(targetSquares(pos, 11), [22]);
+
+  const first = playInteractiveStep(pos, 11, 22);
+  assert.equal(first.ok, true);
+  assert.equal(first.finished, false);
+  assert.equal(first.chain.from, 22);
+  assert.ok(first.position.B.includes(22));
+  assert.equal(first.position.B.includes(24), false);
+  assert.equal(first.position.sideToMove, 'B');
+  const otherPiece = playInteractiveStep(first.position, 18, 23, first.chain);
+  assert.equal(otherPiece.ok, false);
+  assert.equal(otherPiece.position, first.position);
+
+  const second = playInteractiveStep(first.position, 22, 33, first.chain);
+  assert.equal(second.ok, true);
+  assert.equal(second.finished, false);
+  const end = playInteractiveStep(second.position, 33, 24, second.chain);
+  assert.equal(end.ok, true);
+  assert.equal(end.finished, true);
+  assert.equal(end.move, '11x22x33x24');
+  const whole = applyMoveChecked(pos, '11x22x33x24', 'B');
+  assert.deepEqual(end.position, whole.position);
 });

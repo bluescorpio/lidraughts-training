@@ -1,11 +1,9 @@
 import { mountBoard } from '../draughts/BoardView.js';
-import { applyMoveChecked, genMoves, positionFromFen, positionToBoard } from '../draughts/board.js';
+import { applyMoveChecked, playInteractiveStep, positionFromFen, positionToBoard } from '../draughts/board.js';
 import { KILL_DRAFTS } from '../content/pack.js';
 import {
-  chooseMovePath,
   gradeAttempt,
   normalizeMove,
-  pathNotation,
   repliesAfter,
   targetSquares,
 } from '../kill/line.js';
@@ -48,11 +46,12 @@ export function renderKill(root, ctx) {
   let attempt = [];
   let revealed = false;
   let selected = null;
+  let chain = null;
 
   root.innerHTML = `
     <section class="card kill-page">
       <h2>杀棋专练</h2>
-      <p class="muted">一次看一题。只走该走的一方；有吃子时先吃。</p>
+      <p class="muted">一次看一题。只走斜线；有吃子时必须吃，连吃要接着走同一颗子。</p>
       <div class="filter-row" id="kill-filters">
         ${FILTERS.map((item) => {
           const count = item.id === 'all' ? puzzles.length : puzzles.filter((puzzle) => (puzzle.prefix || puzzle.id[0]) === item.id).length;
@@ -120,13 +119,15 @@ export function renderKill(root, ctx) {
     if (!prev) return;
     pos = prev.pos;
     attempt = prev.attempt;
-    selected = null;
+    chain = prev.chain;
+    selected = prev.selected;
     paint('已回到上一步。');
   };
   root.querySelector('#kill-reset').onclick = () => {
     pos = positionFromFen(puzzle.fen);
     past = [];
     attempt = [];
+    chain = null;
     selected = null;
     revealed = false;
     root.querySelector('#kill-answer').classList.add('hidden');
@@ -171,49 +172,57 @@ export function renderKill(root, ctx) {
   }
 
   function onSquare(sq, piece) {
-    const color = pos.sideToMove;
-    if (piece && piece.color === color) {
-      selected = sq;
-      boardApi.setSelected(sq);
-      boardApi.setHighlights(targetSquares(pos, sq));
+    const mover = chain?.color || pos.sideToMove;
+    if (chain && sq === chain.from) {
+      selected = chain.from;
+      paint('这颗子还要继续吃。');
       return;
     }
-    if (!selected) {
+    if (chain && piece && piece.color === mover) {
+      paint('这颗子还要继续吃。');
+      return;
+    }
+    if (!chain && piece && piece.color === mover) {
+      selected = sq;
+      paint('');
+      return;
+    }
+    if (!chain && !selected) {
       paint('先点该走一方的棋子。');
       return;
     }
-    const paths = genMoves(pos, color).filter((path) => path[0] === selected);
-    const path = chooseMovePath(paths, selected, sq);
-    if (!path) {
-      paint(paths.some((item) => item.includes(sq)) ? '有好几条线，请点最终落点。' : '这一步走不到那里。');
+    const from = chain ? chain.from : selected;
+    const step = playInteractiveStep(pos, from, sq, chain);
+    if (!step.ok) {
+      paint(step.error);
       return;
     }
-    const notation = pathNotation(pos, path);
-    const result = applyMoveChecked(pos, notation, color);
-    if (!result.ok) {
-      paint(result.error || '这一步先放一放。');
+    past.push({ pos, attempt, chain, selected });
+    pos = step.position;
+    chain = step.chain;
+    selected = chain ? chain.from : null;
+    if (!step.finished) {
+      paint('还要继续吃，请接着走这颗子。');
       return;
     }
-    const previous = { pos, attempt };
-    let nextPos = result.position;
-    const nextAttempt = [...attempt, { move: normalizeMove(notation), side: color, auto: false }];
-    const replies = repliesAfter(puzzle, nextAttempt.filter((step) => step.side === (puzzle.side === 'w' ? 'W' : 'B') && !step.auto).map((step) => step.move));
-    let replyNote = '';
+    let nextAttempt = [...attempt, { move: normalizeMove(step.move), side: mover, auto: false }];
+    let note = '';
+    const replies = repliesAfter(
+      puzzle,
+      nextAttempt.filter((item) => item.side === (puzzle.side === 'w' ? 'W' : 'B') && !item.auto).map((item) => item.move),
+    );
     for (const reply of replies) {
-      const replySide = nextPos.sideToMove;
-      const replyResult = applyMoveChecked(nextPos, reply, replySide);
+      const replySide = pos.sideToMove;
+      const replyResult = applyMoveChecked(pos, reply, replySide);
       if (!replyResult.ok) break;
       nextAttempt.push({ move: normalizeMove(reply), side: replySide, auto: true });
-      nextPos = replyResult.position;
-      replyNote = '对方的应着已经摆上。';
+      pos = replyResult.position;
+      note = '对方的应着已经摆上。';
     }
-    past.push(previous);
-    pos = nextPos;
     attempt = nextAttempt;
-    selected = null;
     const grade = gradeAttempt(puzzle, solverMoves());
     if (grade.status === 'full') markSolved();
-    paint(grade.status === 'full' ? messageFor(grade) : replyNote);
+    paint(grade.status === 'full' ? messageFor(grade) : note);
   }
 
   function markSolved() {
@@ -226,17 +235,22 @@ export function renderKill(root, ctx) {
   }
 
   function paint(text) {
+    const focus = chain ? chain.from : selected;
     boardApi.setBoard(positionToBoard(pos));
-    boardApi.setSelected(selected);
-    boardApi.setHighlights(selected ? targetSquares(pos, selected) : []);
+    boardApi.setSelected(focus);
+    boardApi.setHighlights(focus ? targetSquares(pos, focus, chain) : []);
     const turn = root.querySelector('#kill-turn');
-    turn.textContent = pos.sideToMove === 'W' ? '现在轮到白棋。' : '现在轮到黑棋。';
+    if (chain) turn.textContent = '还要继续吃，请接着走这颗子。';
+    else turn.textContent = pos.sideToMove === 'W' ? '现在轮到白棋。' : '现在轮到黑棋。';
     const moves = root.querySelector('#kill-moves');
-    moves.textContent = attempt.length
+    const partial = chain ? `${chain.squares.join('x')}…` : '';
+    const played = attempt.length
       ? attempt.map((step) => (step.auto ? `（${step.side === 'W' ? '白' : '黑'} ${step.move}）` : step.move)).join(' ')
-      : '还没走';
-    if (text) root.querySelector('#kill-msg').textContent = text;
-    else if (!attempt.length) root.querySelector('#kill-msg').textContent = '';
+      : '';
+    moves.textContent = [played, partial].filter(Boolean).join(' ') || '还没走';
+    const msg = root.querySelector('#kill-msg');
+    if (text) msg.textContent = text;
+    else if (!chain) msg.textContent = '';
   }
 }
 

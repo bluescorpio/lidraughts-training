@@ -399,3 +399,71 @@ export function applyMoveChecked(pos, move, color = pos?.sideToMove || 'W') {
   next.sideToMove = color === 'W' ? 'B' : 'W';
   return { ok: true, position: next, path };
 }
+
+function maxCapturePaths(paths) {
+  const max = (paths || []).reduce((n, path) => Math.max(n, path.length - 1), 0);
+  if (!max) return [];
+  return paths.filter((path) => path.length - 1 === max);
+}
+
+/** Squares the learner may click next: one diagonal hop, never the far end of a chain. */
+export function nextLandingSquares(pos, from, chain = null) {
+  const paths = chain
+    ? maxCapturePaths(capturePaths(pos, chain.from, chain.color, chain.king))
+    : genMoves(pos, pos?.sideToMove).filter((path) => path[0] === from);
+  return [...new Set(paths.map((path) => path[1]).filter(Boolean))];
+}
+
+/**
+ * Apply one interactive hop using the checked international-draughts generator.
+ * A capture chain stays with the same piece until no further maximum capture exists.
+ * Illegal clicks return the same position.
+ */
+export function playInteractiveStep(pos, from, to, chain = null) {
+  const color = chain?.color || pos?.sideToMove || 'W';
+  if (chain && from !== chain.from) {
+    return { ok: false, error: '这颗子还要继续吃。', position: pos, chain };
+  }
+  const piece = occupied(pos, from);
+  if (!piece || piece.color !== color) {
+    return { ok: false, error: '先走该走的一方。', position: pos, chain };
+  }
+  if (to === from) {
+    return { ok: false, error: '先点落点。', position: pos, chain };
+  }
+  const king = chain ? chain.king : piece.king;
+  const paths = chain
+    ? maxCapturePaths(capturePaths(pos, from, color, king))
+    : genMoves(pos, color).filter((path) => path[0] === from);
+  if (!paths.some((path) => path[1] === to)) {
+    const skips = paths.some((path) => path.includes(to));
+    let error = '这一步不合规则，棋子留在原地。';
+    if (skips) error = '请先走到下一格，不能一次跳到终点。';
+    else if (!chain && hasCapture(pos, color)) error = '有吃子时必须先吃。';
+    return { ok: false, error, position: pos, chain };
+  }
+  if (!chain && !hasCapture(pos, color)) {
+    const move = `${from}-${to}`;
+    const result = applyMoveChecked(pos, move, color);
+    if (!result.ok) {
+      return { ok: false, error: '这一步不合规则，棋子留在原地。', position: pos, chain: null };
+    }
+    return { ok: true, position: result.position, chain: null, move, finished: true };
+  }
+  const hop = capturesFrom(pos, from, color, king).find((item) => item.to === to);
+  if (!hop) return { ok: false, error: '这一步不合规则，棋子留在原地。', position: pos, chain };
+  const next = clonePosition(pos);
+  removePiece(next, from, color);
+  removePiece(next, hop.captured, color === 'W' ? 'B' : 'W');
+  if (king) next[`${color}K`].push(to);
+  else next[color].push(to);
+  next.sideToMove = color;
+  const squares = [...(chain?.squares || [from]), to];
+  const more = maxCapturePaths(capturePaths(next, to, color, king));
+  if (more.length) {
+    return { ok: true, position: next, chain: { from: to, color, king, squares }, move: null, finished: false };
+  }
+  if (!king) promotePosition(next, color, to);
+  next.sideToMove = color === 'W' ? 'B' : 'W';
+  return { ok: true, position: next, chain: null, move: squares.join('x'), finished: true };
+}

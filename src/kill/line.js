@@ -1,4 +1,4 @@
-import { applyMoveChecked, genMoves, hasCapture, positionFromFen } from '../draughts/board.js';
+import { applyMoveChecked, nextLandingSquares, positionFromFen } from '../draughts/board.js';
 
 const MOVE_RE = /\d{1,2}(?:[-xX]\d{1,2})+/g;
 
@@ -36,29 +36,9 @@ export function killFen(item) {
   return `${turn}:B${fmt(item.black)}:W${fmt(item.white)}`;
 }
 
-export function pathNotation(pos, path) {
-  const sep = hasCapture(pos, pos?.sideToMove) ? 'x' : '-';
-  return path.join(sep);
-}
-
-/** Pick the legal path the learner clicked. Full captures count as one move. */
-export function chooseMovePath(paths, from, sq) {
-  const mine = (paths || []).filter((path) => path[0] === from && path.includes(sq));
-  if (!mine.length) return null;
-  const finals = mine.filter((path) => path[path.length - 1] === sq);
-  if (finals.length === 1) return finals[0];
-  if (mine.length === 1) return mine[0];
-  const quiet = mine.filter((path) => path.length === 2 && path[1] === sq);
-  if (quiet.length === 1) return quiet[0];
-  return null;
-}
-
-export function targetSquares(pos, from) {
-  const squares = new Set();
-  for (const path of genMoves(pos).filter((path) => path[0] === from)) {
-    for (let i = 1; i < path.length; i += 1) squares.add(path[i]);
-  }
-  return [...squares];
+/** Immediate legal landings only. A chain highlights the locked piece's next hop. */
+export function targetSquares(pos, from, chain = null) {
+  return nextLandingSquares(pos, from, chain);
 }
 
 /** Play the recorded line until a move is not legal, and keep that prefix. */
