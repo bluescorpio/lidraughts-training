@@ -1,4 +1,4 @@
-import { loadState, saveState, defaultState } from './store.js';
+import { loadState, saveState, defaultState, migrateState, absorbKillSidecar } from './store.js';
 import { buildSeed } from './seed.js';
 import { renderToday } from './pages/today.js';
 import { renderLibrary } from './pages/library.js';
@@ -7,10 +7,12 @@ import { renderReview } from './pages/review.js';
 import { renderLocklist } from './pages/locklist.js';
 import { renderWeekplan } from './pages/weekplan.js';
 import { renderWeapons } from './pages/weapons.js';
+import { renderKill } from './pages/kill.js';
 import { mountLockFloat } from './lockFloat.js';
 
 const NAV = [
   { id: 'today', label: '今天', roles: ['child', 'parent'] },
+  { id: 'kill', label: '杀棋专练', roles: ['child', 'parent'] },
   { id: 'problems', label: '题库', roles: ['child', 'parent'] },
   { id: 'locklist', label: '锁住清单', roles: ['child', 'parent'] },
   { id: 'review', label: '复盘本', roles: ['parent', 'child'] },
@@ -23,12 +25,15 @@ function initState() {
   let state = loadState();
   if (!state || !state.games?.length) {
     const seed = buildSeed();
-    state = {
+    state = migrateState({
       ...defaultState(),
       ...seed,
       role: state?.role || 'child',
       publishedTodayId: null,
-    };
+      killAnswers: state?.killAnswers,
+      killRetry: state?.killRetry,
+    });
+    absorbKillSidecar(state);
     saveState(state);
   }
   return state;
@@ -52,7 +57,26 @@ function navigate(page, params = {}) {
     appState.page = 'today';
     appState.params = {};
   }
+  syncHash();
   render();
+}
+
+function syncHash() {
+  const hash = location.hash || '';
+  if (appState.page === 'kill') {
+    const id = appState.params?.killId;
+    const next = id ? `#kill/${encodeURIComponent(id)}` : '#kill';
+    if (hash !== next) history.replaceState(null, '', next);
+    return;
+  }
+  if (hash.startsWith('#kill')) history.replaceState(null, '', location.pathname + location.search);
+}
+
+function readKillHash() {
+  const hash = location.hash || '';
+  if (!hash.startsWith('#kill')) return null;
+  const id = decodeURIComponent(hash.replace(/^#kill\/?/, '').split('?')[0] || '');
+  return id ? { killId: id } : {};
 }
 
 function renderNav() {
@@ -93,6 +117,7 @@ function render() {
     locklist: renderLocklist,
     weekplan: renderWeekplan,
     weapons: renderWeapons,
+    kill: renderKill,
   };
   const fn = map[appState.page] || renderToday;
   fn(root, ctx);
@@ -114,4 +139,9 @@ document.querySelectorAll('.role-btn').forEach((btn) => {
   });
 });
 
+const bootKill = readKillHash();
+if (bootKill) {
+  appState.page = 'kill';
+  appState.params = bootKill;
+}
 render();

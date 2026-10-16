@@ -1,10 +1,14 @@
 /** Local-only persistence with an explicit, idempotent schema migration. */
 import { defaultWeaponProgress, normalizeWeaponProgress } from './weapons.js';
 import { normalizeMetricLog } from './metrics.js';
+import { CONTENT_PACK_ID, KILL_DRAFTS, KILL_PACK_ID, OTB_GAMES } from './content/pack.js';
 
 export const KEY = 'wz-counter-trainer-v1';
 export const LEGACY_KEYS = ['wangzhi-train-v1'];
-export const SCHEMA_VERSION = 2;
+/** Standalone puzzle-boards keys. Merged in once; the app keeps writing them. */
+export const KILL_ANSWERS_KEY = 'wangzhi-kill-puzzles-v1';
+export const KILL_RETRY_KEY = 'wangzhi-kill-retry-v1';
+export const SCHEMA_VERSION = 4;
 
 export function defaultState() {
   return {
@@ -29,6 +33,10 @@ export function defaultState() {
     favorites: [],
     openings: {},
     counters: { gamesImported: 0, problemsDone: 0 },
+    seededPacks: [],
+    killSolved: [],
+    killAnswers: {},
+    killRetry: [],
   };
 }
 
@@ -40,7 +48,8 @@ export function loadState(storage = globalThis.localStorage) {
   if (!raw) return null;
   try {
     const state = migrateState(JSON.parse(raw));
-    if (!canonical && legacyKey) storage.setItem(KEY, JSON.stringify(state));
+    const absorbed = absorbKillSidecar(state, storage);
+    if ((!canonical && legacyKey) || absorbed) storage.setItem(KEY, JSON.stringify(state));
     return state;
   } catch {
     return null;
@@ -51,8 +60,23 @@ export function migrateState(input) {
   const base = defaultState();
   const source = input && typeof input === 'object' ? input : {};
   const state = { ...base, ...source, schemaVersion: SCHEMA_VERSION };
-  for (const key of ['games', 'problems', 'reviews', 'metricLogs', 'weaponStars', 'customLevels', 'imports', 'slowSessions', 'misses', 'speedRuns', 'favorites']) {
+  for (const key of ['games', 'problems', 'reviews', 'metricLogs', 'weaponStars', 'customLevels', 'imports', 'slowSessions', 'misses', 'speedRuns', 'favorites', 'seededPacks', 'killSolved']) {
     if (!Array.isArray(state[key])) state[key] = [];
+  }
+  state.killSolved = state.killSolved.filter((id) => typeof id === 'string');
+  state.killAnswers = cleanKillAnswers(state.killAnswers);
+  state.killRetry = cleanKillRetry(state.killRetry);
+  if (!state.seededPacks.includes(CONTENT_PACK_ID)) {
+    const seenGames = new Set(state.games.map((game) => game?.id).filter(Boolean));
+    const seenProblems = new Set(state.problems.map((problem) => problem?.id).filter(Boolean));
+    state.games = [...state.games, ...OTB_GAMES.filter((game) => !seenGames.has(game.id))];
+    state.problems = [...state.problems, ...KILL_DRAFTS.filter((problem) => !seenProblems.has(problem.id))];
+    state.seededPacks = [...state.seededPacks, CONTENT_PACK_ID];
+  }
+  if (!state.seededPacks.includes(KILL_PACK_ID)) {
+    const seenKill = new Set(state.problems.map((problem) => problem?.id).filter(Boolean));
+    state.problems = [...state.problems, ...KILL_DRAFTS.filter((problem) => !seenKill.has(problem.id))];
+    state.seededPacks = [...state.seededPacks, KILL_PACK_ID];
   }
   state.metricLogs = state.metricLogs.map(normalizeMetricLog).filter(Boolean);
   state.weaponProgress = normalizeWeaponProgress(state.weaponProgress);
@@ -67,6 +91,8 @@ export function saveState(state, storage = globalThis.localStorage) {
   if (!storage) return;
   const normalized = migrateState(state);
   storage.setItem(KEY, JSON.stringify(normalized));
+  storage.setItem(KILL_ANSWERS_KEY, JSON.stringify(normalized.killAnswers));
+  storage.setItem(KILL_RETRY_KEY, JSON.stringify(normalized.killRetry));
   // Keep the old key as a recoverable compatibility copy for existing MVP builds.
   if (LEGACY_KEYS.length && !readRaw(storage, LEGACY_KEYS[0])) storage.setItem(LEGACY_KEYS[0], JSON.stringify(normalized));
 }
@@ -97,7 +123,61 @@ export function importState(json, currentState = defaultState(), mode = 'merge')
     weaponProgress: normalizeWeaponProgress({ ...current.weaponProgress, ...next.weaponProgress }),
     customLevels: mergeById(current.customLevels, next.customLevels),
     imports: mergeById(current.imports, next.imports),
+    killAnswers: { ...current.killAnswers, ...next.killAnswers },
+    killRetry: cleanKillRetry([...(current.killRetry || []), ...(next.killRetry || [])]),
   });
+}
+
+function cleanKillAnswers(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out = {};
+  for (const [id, move] of Object.entries(value)) {
+    if (typeof id === 'string' && typeof move === 'string' && move) out[id] = move;
+  }
+  return out;
+}
+
+function cleanKillRetry(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const id of value) {
+    if (typeof id === 'string' && id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/** Copy puzzle-boards answers / 二刷 ids that the main record does not already have. */
+export function absorbKillSidecar(state, storage = globalThis.localStorage) {
+  if (!state || !storage?.getItem) return false;
+  state.killAnswers = cleanKillAnswers(state.killAnswers);
+  state.killRetry = cleanKillRetry(state.killRetry);
+  let changed = false;
+  const answers = parseStoredJson(storage, KILL_ANSWERS_KEY);
+  if (answers && typeof answers === 'object' && !Array.isArray(answers)) {
+    for (const [id, move] of Object.entries(answers)) {
+      if (typeof id !== 'string' || typeof move !== 'string' || !move) continue;
+      if (state.killAnswers[id] == null) {
+        state.killAnswers[id] = move;
+        changed = true;
+      }
+    }
+  }
+  const retry = parseStoredJson(storage, KILL_RETRY_KEY);
+  if (Array.isArray(retry)) {
+    for (const id of retry) {
+      if (typeof id === 'string' && id && !state.killRetry.includes(id)) {
+        state.killRetry.push(id);
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
+function parseStoredJson(storage, key) {
+  const raw = readRaw(storage, key);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
 }
 
 function mergeById(a, b) {

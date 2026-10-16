@@ -2,7 +2,16 @@
  * 100-square international draughts helpers.
  * Dark squares numbered 1–50 (playable). White starts on 31–50, black on 1–20.
  * Board display: row 0 (top) = black side (1–5), row 9 (bottom) = white side (46–50).
+ *
+ * Checked moves use src/draughts/rules.js (FMJD / 中国国际跳棋):
+ * promote only when the move ends on 1–5 (white) or 46–50 (black).
  */
+import {
+  captureSequencesFrom,
+  getLegalForSelection,
+  getLegalMoves,
+  tryStep,
+} from './rules.js';
 
 // This project records imported and built-in games from the black side first.
 export const START_FEN = 'B:B1-20:W31-50';
@@ -217,112 +226,53 @@ export function clonePosition(pos) {
   };
 }
 
-function occupied(pos, sq) {
-  for (const color of ['W', 'B']) {
-    if ((pos[color] || []).includes(sq)) return { color, king: false };
-    if ((pos[`${color}K`] || []).includes(sq)) return { color, king: true };
+function toSide(color) {
+  return color === 'B' || color === 'b' ? 'b' : 'w';
+}
+
+/** Pieces map used by the FMJD generator. Numeric keys, color 'w' | 'b'. */
+export function positionToPieces(pos) {
+  const pieces = {};
+  for (const sq of pos?.W || []) pieces[sq] = { color: 'w', king: false };
+  for (const sq of pos?.B || []) pieces[sq] = { color: 'b', king: false };
+  for (const sq of pos?.WK || []) pieces[sq] = { color: 'w', king: true };
+  for (const sq of pos?.BK || []) pieces[sq] = { color: 'b', king: true };
+  return pieces;
+}
+
+export function piecesToPosition(pieces, sideToMove = 'W') {
+  const pos = { W: [], B: [], WK: [], BK: [], sideToMove };
+  for (const [key, piece] of Object.entries(pieces || {})) {
+    if (!piece) continue;
+    const sq = Number(key);
+    if (!Number.isInteger(sq)) continue;
+    const bucket = piece.king
+      ? (piece.color === 'w' ? 'WK' : 'BK')
+      : (piece.color === 'w' ? 'W' : 'B');
+    pos[bucket].push(sq);
   }
-  return null;
+  return pos;
 }
 
-function dirsFrom(sq) {
-  const rc = sqToRC(sq);
-  if (!rc) return [];
-  return [[-1, -1], [-1, 1], [1, -1], [1, 1]]
-    .map(([dr, dc]) => ({ dr, dc, mid: rcToSq(rc.row + dr, rc.col + dc) }))
-    .filter((d) => d.mid);
-}
-
-function movePiece(pos, from, to, color, king) {
-  const next = clonePosition(pos);
-  const list = king ? next[`${color}K`] : next[color];
-  const index = list.indexOf(from);
-  if (index < 0) return null;
-  list.splice(index, 1);
-  next[king ? `${color}K` : color].push(to);
-  return next;
-}
-
-function removePiece(pos, sq, color) {
-  for (const key of [color, `${color}K`]) {
-    const list = pos[key];
-    const i = list.indexOf(sq);
-    if (i >= 0) { list.splice(i, 1); return; }
-  }
-}
-
-function promotePosition(pos, color, sq) {
-  const list = pos[color];
-  const i = list.indexOf(sq);
-  if (i >= 0 && ((color === 'W' && sq <= 5) || (color === 'B' && sq >= 46))) {
-    list.splice(i, 1);
-    pos[`${color}K`].push(sq);
-  }
-}
-
-function manCaptures(pos, from, color, occupiedRemoved = new Set()) {
-  const out = [];
-  const rc = sqToRC(from);
-  for (const { dr, dc } of dirsFrom(from)) {
-    const mid = rcToSq(rc.row + dr, rc.col + dc);
-    const land = rcToSq(rc.row + dr * 2, rc.col + dc * 2);
-    const enemy = mid && occupied(pos, mid);
-    if (!land || occupied(pos, land) || occupiedRemoved.has(mid)) continue;
-    if (enemy && enemy.color !== color) out.push({ to: land, captured: mid });
-  }
-  return out;
-}
-
-function kingCaptures(pos, from, color, occupiedRemoved = new Set()) {
-  const out = [];
-  const rc = sqToRC(from);
-  for (const { dr, dc } of dirsFrom(from)) {
-    let r = rc.row + dr;
-    let c = rc.col + dc;
-    let first = null;
-    while (true) {
-      const sq = rcToSq(r, c);
-      if (!sq) break;
-      const piece = occupied(pos, sq);
-      if (piece) {
-        if (first || piece.color === color || occupiedRemoved.has(sq)) break;
-        first = sq;
-      } else if (first) {
-        out.push({ to: sq, captured: first });
-      }
-      r += dr; c += dc;
-    }
-  }
-  return out;
-}
-
-function capturesFrom(pos, from, color, king, removed = new Set()) {
-  return king ? kingCaptures(pos, from, color, removed) : manCaptures(pos, from, color, removed);
-}
-
-function capturePaths(pos, from, color, king, prefix = [from], removed = new Set()) {
-  const options = capturesFrom(pos, from, color, king, removed);
-  if (!options.length) return prefix.length > 1 ? [prefix] : [];
-  const paths = [];
-  for (const option of options) {
-    const nextRemoved = new Set(removed).add(option.captured);
-    const next = clonePosition(pos);
-    // During a sequence captured pieces are unavailable, while the moving
-    // piece is represented at the new landing square.
-    removePiece(next, from, color);
-    removePiece(next, option.captured, color === 'W' ? 'B' : 'W');
-    if (king) next[`${color}K`].push(option.to);
-    else next[color].push(option.to);
-    paths.push(...capturePaths(next, option.to, color, king, [...prefix, option.to], nextRemoved));
-  }
-  return paths;
+function chainToActive(chain) {
+  if (!chain) return null;
+  const path = [...(chain.squares || chain.path || [])];
+  if (path.length < 1) return null;
+  return {
+    path,
+    captures: [...(chain.captures || [])],
+    maxCaptures: chain.maxCaptures,
+  };
 }
 
 export function genCaptures(pos, color = pos?.sideToMove || 'W') {
+  const pieces = positionToPieces(pos);
   const out = [];
   for (const from of [...(pos?.[color] || []), ...(pos?.[`${color}K`] || [])]) {
-    const king = (pos?.[`${color}K`] || []).includes(from);
-    for (const path of capturePaths(pos, from, color, king)) out.push(path);
+    const piece = pieces[from];
+    if (!piece) continue;
+    const seqs = captureSequencesFrom(pieces, from, piece.color, !!piece.king, new Set());
+    for (const seq of seqs) out.push(seq.path.slice());
   }
   return out;
 }
@@ -338,62 +288,106 @@ export function hasCapture(pos, color = pos?.sideToMove || 'W') {
 }
 
 export function genMoves(pos, color = pos?.sideToMove || 'W') {
-  if (hasCapture(pos, color)) return longestCaptures(pos, color);
-  const out = [];
-  const occupiedSquares = new Set([...pos.W, ...pos.B, ...pos.WK, ...pos.BK]);
-  for (const from of pos[color] || []) {
-    const rc = sqToRC(from);
-    const forward = color === 'W' ? -1 : 1;
-    for (const dc of [-1, 1]) {
-      const to = rcToSq(rc.row + forward, rc.col + dc);
-      if (to && !occupiedSquares.has(to)) out.push([from, to]);
-    }
-  }
-  for (const from of pos[`${color}K`] || []) {
-    const rc = sqToRC(from);
-    for (const { dr, dc } of dirsFrom(from)) {
-      let r = rc.row + dr; let c = rc.col + dc;
-      while (true) {
-        const to = rcToSq(r, c);
-        if (!to || occupiedSquares.has(to)) break;
-        out.push([from, to]); r += dr; c += dc;
-      }
-    }
-  }
-  return out;
+  const pieces = positionToPieces(pos);
+  return getLegalMoves(pieces, toSide(color)).map((move) => move.path.slice());
 }
 
 export function applyMoveChecked(pos, move, color = pos?.sideToMove || 'W') {
-  const clean = String(move || '').replace(/\s+/g, '').replace(/X/g, 'x');
+  const clean = String(move || '').replace(/\s+/g, '').replace(/[×X]/g, 'x');
   const separator = clean.includes('x') ? 'x' : clean.includes('-') ? '-' : null;
   const path = separator ? clean.split(separator).map(Number) : [];
-  if (path.length < 2 || path.some((sq) => !Number.isInteger(sq) || sq < 1 || sq > 50)) {
+  if (!separator || path.length < 2 || path.some((sq) => !Number.isInteger(sq) || sq < 1 || sq > 50)) {
     return { ok: false, error: `无法解析着法：${move}`, position: clonePosition(pos) };
   }
-  const from = path[0];
-  const piece = occupied(pos, from);
-  if (!piece || piece.color !== color) return { ok: false, error: `${from} 不是${color === 'W' ? '白' : '黑'}方棋子`, position: clonePosition(pos) };
-  const legal = separator === 'x' ? longestCaptures(pos, color) : genMoves(pos, color);
-  if (separator === '-' && hasCapture(pos, color)) return { ok: false, error: '有吃子时必须先吃', position: clonePosition(pos) };
-  if (!legal.some((candidate) => candidate.length === path.length && candidate.every((sq, i) => sq === path[i]))) {
-    return { ok: false, error: `不合法着法：${move}`, position: clonePosition(pos) };
+  const side = toSide(color);
+  const pieces0 = positionToPieces(pos);
+  const mover = pieces0[path[0]];
+  if (!mover || mover.color !== side) {
+    return { ok: false, error: `${path[0]} 不是${color === 'W' ? '白' : '黑'}方棋子`, position: clonePosition(pos) };
   }
-  let next = clonePosition(pos);
-  if (separator === '-') next = movePiece(next, from, path[1], color, piece.king);
-  else {
-    removePiece(next, from, color);
-    let current = from;
-    for (let i = 1; i < path.length; i += 1) {
-      const to = path[i];
-      const capture = capturesFrom(next, current, color, piece.king).find((x) => x.to === to);
-      if (!capture) return { ok: false, error: `无法验证吃子路径：${move}`, position: clonePosition(pos) };
-      removePiece(next, capture.captured, color === 'W' ? 'B' : 'W');
-      current = to;
+  let pieces = pieces0;
+  let active = null;
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const res = tryStep(pieces, side, path[i], path[i + 1], active);
+    if (!res.ok) return { ok: false, error: res.error || `不合法着法：${move}`, position: clonePosition(pos) };
+    if (separator === '-' && res.completedMove?.isCapture) {
+      return { ok: false, error: '有吃子时必须先吃', position: clonePosition(pos) };
     }
-    if (piece.king) next[`${color}K`].push(current);
-    else next[color].push(current);
-    promotePosition(next, color, current);
+    if (res.completedMove && i !== path.length - 2) {
+      return { ok: false, error: `不合法着法：${move}`, position: clonePosition(pos) };
+    }
+    pieces = res.pieces;
+    active = res.active;
   }
-  next.sideToMove = color === 'W' ? 'B' : 'W';
-  return { ok: true, position: next, path };
+  if (active) return { ok: false, error: '连吃还没走完', position: clonePosition(pos) };
+  return {
+    ok: true,
+    position: piecesToPosition(pieces, color === 'W' ? 'B' : 'W'),
+    path,
+  };
+}
+
+/** Squares the learner may click next: one diagonal hop, never the far end of a chain. */
+export function nextLandingSquares(pos, from, chain = null) {
+  const color = chain?.color || pos?.sideToMove || 'W';
+  const info = getLegalForSelection(
+    positionToPieces(pos),
+    toSide(color),
+    chain ? chain.from : from,
+    chainToActive(chain),
+  );
+  return [...(info.destinations || [])];
+}
+
+/**
+ * Apply one interactive hop with FMJD rules.
+ * Captured men stay on the board until the sequence ends (they only block).
+ * A man that touches the promotion line mid-capture stays a man.
+ * Illegal clicks return the same position.
+ */
+export function playInteractiveStep(pos, from, to, chain = null) {
+  const color = chain?.color || pos?.sideToMove || 'W';
+  const side = toSide(color);
+  if (chain && from !== chain.from) {
+    return { ok: false, error: '这颗子还要继续吃。', position: pos, chain };
+  }
+  if (to === from) {
+    return { ok: false, error: '先点落点。', position: pos, chain };
+  }
+  const pieces = positionToPieces(pos);
+  const piece = pieces[from];
+  if (!piece || piece.color !== side) {
+    return { ok: false, error: '先走该走的一方。', position: pos, chain };
+  }
+  const res = tryStep(pieces, side, from, to, chainToActive(chain));
+  if (!res.ok) {
+    const all = getLegalMoves(pieces, side);
+    const skips = !chain && all.some((move) => move.from === from && move.path.includes(to) && move.path[1] !== to);
+    let error = '这一步不合规则，棋子留在原地。';
+    if (skips) error = '请先走到下一格，不能一次跳到终点。';
+    else if (!chain && (res.errorCode === 'must_capture' || res.errorCode === 'must_majority')) error = '有吃子时必须先吃。';
+    else if (res.errorCode === 'must_continue') error = '这颗子还要继续吃。';
+    else if (res.error) error = res.error;
+    return { ok: false, error, position: pos, chain };
+  }
+  const finished = Boolean(res.completedMove);
+  const position = piecesToPosition(res.pieces, finished ? (color === 'W' ? 'B' : 'W') : color);
+  if (!finished) {
+    const landing = res.active.path[res.active.path.length - 1];
+    return {
+      ok: true,
+      position,
+      chain: {
+        from: landing,
+        color,
+        king: Boolean(res.pieces[landing]?.king),
+        squares: res.active.path.slice(),
+        captures: res.active.captures.slice(),
+        maxCaptures: res.active.maxCaptures,
+      },
+      move: null,
+      finished: false,
+    };
+  }
+  return { ok: true, position, chain: null, move: res.completedMove.notation, finished: true };
 }
