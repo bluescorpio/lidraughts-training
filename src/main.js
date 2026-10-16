@@ -1,4 +1,4 @@
-import { loadState, saveState, defaultState, migrateState } from './store.js';
+import { loadState, saveState, defaultState, migrateState, absorbKillSidecar } from './store.js';
 import { buildSeed } from './seed.js';
 import { renderToday } from './pages/today.js';
 import { renderLibrary } from './pages/library.js';
@@ -30,7 +30,10 @@ function initState() {
       ...seed,
       role: state?.role || 'child',
       publishedTodayId: null,
+      killAnswers: state?.killAnswers,
+      killRetry: state?.killRetry,
     });
+    absorbKillSidecar(state);
     saveState(state);
   }
   return state;

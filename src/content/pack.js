@@ -4,6 +4,8 @@ import { killFen, normalizeMove } from '../kill/line.js';
 import { PACK } from './packData.js';
 
 export const CONTENT_PACK_ID = 'otb-kill-2026-10';
+/** Latest kill bank. Seeded separately so a refresh does not restore deleted games. */
+export const KILL_PACK_ID = 'kill-puzzles-2026-10-234';
 
 const summaryByFolder = new Map((PACK.overview || []).map((row) => [row.folder, row.summary]));
 
